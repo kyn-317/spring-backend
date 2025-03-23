@@ -2,6 +2,7 @@ package com.kyn.spring_backend.routers;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.web.reactive.function.server.RequestPredicates;
 import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.RouterFunctions;
 import org.springframework.web.reactive.function.server.ServerResponse;
@@ -19,9 +20,8 @@ public class UserRouters {
 
     @Bean
     public RouterFunction<ServerResponse> userRoutes() {
-        return RouterFunctions.route()
-                .POST("/users/create", userHandler::createUser)
-                .build();
+        return RouterFunctions.route(RequestPredicates.POST("/user/create"), this.userHandler::createUser)
+                .andRoute(RequestPredicates.POST("/user/login"), this.userHandler::login);
     }
 
 }

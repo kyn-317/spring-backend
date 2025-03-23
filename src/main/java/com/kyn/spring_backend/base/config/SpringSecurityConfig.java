@@ -34,10 +34,10 @@ public class SpringSecurityConfig {
                 .httpBasic(ServerHttpSecurity.HttpBasicSpec::disable)
                 .securityContextRepository(NoOpServerSecurityContextRepository.getInstance())
                 .authorizeExchange(exchanges -> exchanges
-                        //    .pathMatchers("/auth/**").permitAll()
-                        .anyExchange().permitAll())
-                //  .addFilterAt(new JwtAuthenticationFilter(tokenProvider), SecurityWebFiltersOrder.HTTP_BASIC)
-                //                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+                        .pathMatchers("/user/**").permitAll()
+                        .anyExchange().authenticated())
+                .addFilterAt(new JwtAuthenticationFilter(tokenProvider), SecurityWebFiltersOrder.HTTP_BASIC)
+                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .build();
     }
 

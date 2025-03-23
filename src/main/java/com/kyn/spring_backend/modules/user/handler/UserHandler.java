@@ -23,4 +23,10 @@ public class UserHandler {
                 .flatMap(userService::createUser)
                 .flatMap(user -> ServerResponse.ok().bodyValue(user));
     }
+
+    public Mono<ServerResponse> login(ServerRequest request) {
+        return request.bodyToMono(UserInfoDto.class)
+                .flatMap(userService::login)
+                .flatMap(user -> ServerResponse.ok().bodyValue(user));
+    }
 }

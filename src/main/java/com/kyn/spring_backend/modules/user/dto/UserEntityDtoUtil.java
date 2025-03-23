@@ -5,13 +5,14 @@ import java.util.stream.Collectors;
 
 import org.bson.types.ObjectId;
 import org.springframework.beans.BeanUtils;
+import org.springframework.security.crypto.password.PasswordEncoder;
 
 import com.kyn.spring_backend.modules.user.entity.UserAuthEntity;
 import com.kyn.spring_backend.modules.user.entity.UserInfoEntity;
 
-public class EntityDtoUtil {
+public class UserEntityDtoUtil {
 
-    // UserInfoEntity <-> UserInfoDto 변환
+    // UserInfoEntity, userASuthEntity -> UserInfoDto 
     public static UserInfoDto entityToDto(UserInfoEntity entity, List<UserAuthEntity> auths) {
         UserInfoDto dto = new UserInfoDto();
         BeanUtils.copyProperties(entity, dto);
@@ -19,12 +20,49 @@ public class EntityDtoUtil {
 
         if (auths != null && !auths.isEmpty()) {
             List<UserAuthDto> authDtos = auths.stream()
-                    .map(EntityDtoUtil::authEntityToDto)
+                    .map(UserEntityDtoUtil::authEntityToDto)
                     .collect(Collectors.toList());
             dto.setUserAuths(authDtos);
         }
 
         return dto;
+    }
+
+    public static UserInfoEntity createUserInfoEntity(UserInfoDto dto) {
+        UserInfoEntity entity = UserEntityDtoUtil.dtoToEntity(dto);
+        entity.insertDocument(dto.getUserId());
+        return entity;
+    }
+
+    public static UserInfoEntity updateUserInfoEntity(UserInfoDto dto, UserInfoEntity existingUser,
+            PasswordEncoder encoder) {
+        // password update
+        if (dto.getUserPassword() != null
+                && !dto.getUserPassword().isEmpty()) {
+            existingUser.setUserPassword(
+                    encoder.encode(dto.getUserPassword()));
+        }
+        // name update
+        if (dto.getUserName() != null
+                && !dto.getUserName().isEmpty()) {
+            existingUser.setUserName(dto.getUserName());
+        }
+        // email update
+        if (dto.getUserEmail() != null
+                && !dto.getUserEmail().isEmpty()) {
+            existingUser.setUserEmail(dto.getUserEmail());
+        }
+        // update Document
+        existingUser.updateDocument(existingUser.getUserId());
+        return existingUser;
+    }
+
+    public static UserAuthEntity createUserAuthEntity(UserInfoEntity infoEntity) {
+        UserAuthEntity authEntity = UserAuthEntity.create(null, infoEntity.get_id(),
+                infoEntity.getUserEmail(), "USER");
+        authEntity.insertDocument(infoEntity.getUserId());
+        return authEntity;
+
     }
 
     public static UserInfoEntity dtoToEntity(UserInfoDto dto) {
@@ -62,4 +100,5 @@ public class EntityDtoUtil {
 
         return entity;
     }
+
 }

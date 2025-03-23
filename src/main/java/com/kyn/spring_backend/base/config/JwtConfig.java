@@ -14,10 +14,10 @@ import javax.crypto.SecretKey;
 @Configuration
 public class JwtConfig {
 
-    @Value("${jwt.secret:ZnJlZWJvYXJkc2VjcmV0a2V5ZnJlZWJvYXJkc2VjcmV0a2V5ZnJlZWJvYXJkc2VjcmV0a2V5}")
+    @Value("${jwt.secret}")
     private String secret;
 
-    @Value("${jwt.expiration:3600}")
+    @Value("${jwt.expiration}")
     private long expiration;
 
     @Bean

@@ -1,16 +1,25 @@
 package com.kyn.spring_backend.modules.user.service;
 
+import java.util.Collections;
+import java.util.stream.Collectors;
+
 import org.bson.types.ObjectId;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 
-import com.kyn.spring_backend.modules.user.dto.EntityDtoUtil;
+import com.kyn.spring_backend.modules.user.dto.UserEntityDtoUtil;
+import com.kyn.spring_backend.base.dto.ResponseDto;
 import com.kyn.spring_backend.modules.user.dto.UserAuthDto;
 import com.kyn.spring_backend.modules.user.dto.UserInfoDto;
 import com.kyn.spring_backend.modules.user.entity.UserAuthEntity;
 import com.kyn.spring_backend.modules.user.entity.UserInfoEntity;
 import com.kyn.spring_backend.modules.user.repository.UserAuthRepository;
 import com.kyn.spring_backend.modules.user.repository.UserInfoRepository;
+import com.kyn.spring_backend.base.security.JwtTokenProvider;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -21,83 +30,63 @@ public class UserService {
         private final UserInfoRepository userInfoRepository;
         private final UserAuthRepository userAuthRepository;
         private final PasswordEncoder passwordEncoder;
+        private final JwtTokenProvider jwtTokenProvider;
 
         public UserService(UserInfoRepository userInfoRepository, UserAuthRepository userAuthRepository,
-                        PasswordEncoder passwordEncoder) {
+                        PasswordEncoder passwordEncoder, JwtTokenProvider jwtTokenProvider) {
                 this.userInfoRepository = userInfoRepository;
                 this.userAuthRepository = userAuthRepository;
                 this.passwordEncoder = passwordEncoder;
+                this.jwtTokenProvider = jwtTokenProvider;
         }
 
         public Mono<UserInfoDto> createUser(UserInfoDto userInfoDto) {
                 // password encode and entity set
                 userInfoDto.setUserPassword(passwordEncoder.encode(userInfoDto.getUserPassword()));
-                UserInfoEntity userInfoEntity = EntityDtoUtil.dtoToEntity(userInfoDto);
-                userInfoEntity.insertDocument(userInfoDto.getUserId());
-                return userInfoRepository.save(userInfoEntity)
-                                .flatMap(savedUser -> {
-                                        UserAuthEntity authEntity = UserAuthEntity.create(null, savedUser.get_id(),
-                                                        savedUser.getUserEmail(), "USER");
-                                        authEntity.insertDocument(savedUser.getUserId());
-
-                                        return userAuthRepository.save(authEntity)
-                                                        .flatMap(savedAuth -> {
-                                                                return userAuthRepository
-                                                                                .findByUserObjectId(savedUser.get_id())
-                                                                                .collectList()
-                                                                                .map(auths -> EntityDtoUtil.entityToDto(
-                                                                                                savedUser, auths));
-                                                        });
-                                });
+                // create userInfoEntity -> saveUserAuthEntity by savedUserInfo -> make UserInfoDto and return 
+                return userInfoRepository.save(UserEntityDtoUtil.createUserInfoEntity(userInfoDto))
+                                .flatMap(savedUser -> userAuthRepository
+                                                .save(UserEntityDtoUtil.createUserAuthEntity(savedUser))
+                                                .map(savedAuth -> UserEntityDtoUtil.entityToDto(
+                                                                savedUser,
+                                                                Collections.singletonList(savedAuth))));
         }
 
-        // 사용자 정보 조회
+        // search UserInfo
         public Mono<UserInfoDto> findUserById(String id) {
                 return userInfoRepository.findById(new ObjectId(id))
                                 .flatMap(user -> userAuthRepository.findByUserObjectId(user.get_id())
                                                 .collectList()
-                                                .map(auths -> EntityDtoUtil.entityToDto(user, auths)));
+                                                .map(auths -> UserEntityDtoUtil.entityToDto(user, auths)));
         }
 
-        // 이메일로 사용자 정보 조회
+        // search UserInfo by email
         public Mono<UserInfoDto> findUserByEmail(String email) {
                 return userInfoRepository.findByUserEmail(email)
                                 .flatMap(user -> userAuthRepository.findByUserObjectId(user.get_id())
                                                 .collectList()
-                                                .map(auths -> EntityDtoUtil.entityToDto(user, auths)));
+                                                .map(auths -> UserEntityDtoUtil.entityToDto(user, auths)));
         }
 
-        // 사용자 ID로 사용자 정보 조회
+        // search UserInfo by userId
         public Mono<UserInfoDto> findUserByUserId(String userId) {
                 return userInfoRepository.findByUserId(userId)
                                 .flatMap(user -> userAuthRepository.findByUserObjectId(user.get_id())
                                                 .collectList()
-                                                .map(auths -> EntityDtoUtil.entityToDto(user, auths)));
+                                                .map(auths -> UserEntityDtoUtil.entityToDto(user, auths)));
         }
 
-        // 사용자 정보 수정
+        // update UserInfo (email, password, name only can update)
         public Mono<UserInfoDto> updateUser(UserInfoDto userInfoDto) {
                 return userInfoRepository.findById(new ObjectId(userInfoDto.getId()))
                                 .flatMap(existingUser -> {
-                                        // 비밀번호가 변경되면 암호화
-                                        if (userInfoDto.getUserPassword() != null
-                                                        && !userInfoDto.getUserPassword().isEmpty()) {
-                                                userInfoDto.setUserPassword(
-                                                                passwordEncoder.encode(userInfoDto.getUserPassword()));
-                                        } else {
-                                                userInfoDto.setUserPassword(existingUser.getUserPassword());
-                                        }
-
-                                        UserInfoEntity updatedEntity = EntityDtoUtil.dtoToEntity(userInfoDto);
-                                        updatedEntity.updateDocument(
-                                                        userInfoDto.getUserId() != null ? userInfoDto.getUserId()
-                                                                        : existingUser.getUserId());
-
-                                        return userInfoRepository.save(updatedEntity)
+                                        return userInfoRepository
+                                                        .save(UserEntityDtoUtil.updateUserInfoEntity(userInfoDto,
+                                                                        existingUser, passwordEncoder))
                                                         .flatMap(updatedUser -> userAuthRepository
                                                                         .findByUserObjectId(updatedUser.get_id())
                                                                         .collectList()
-                                                                        .map(auths -> EntityDtoUtil.entityToDto(
+                                                                        .map(auths -> UserEntityDtoUtil.entityToDto(
                                                                                         updatedUser, auths)));
                                 });
         }
@@ -115,8 +104,10 @@ public class UserService {
                                                                 return userAuthRepository
                                                                                 .findByUserObjectId(user.get_id())
                                                                                 .collectList()
-                                                                                .map(auths -> EntityDtoUtil.entityToDto(
-                                                                                                user, auths));
+                                                                                .map(auths -> UserEntityDtoUtil
+                                                                                                .entityToDto(
+                                                                                                                user,
+                                                                                                                auths));
                                                         })
                                                         .switchIfEmpty(
                                                                         // 존재하지 않으면 새 권한 추가
@@ -137,14 +128,14 @@ public class UserService {
                                                                                                                 .findByUserObjectId(
                                                                                                                                 user.get_id())
                                                                                                                 .collectList()
-                                                                                                                .map(auths -> EntityDtoUtil
+                                                                                                                .map(auths -> UserEntityDtoUtil
                                                                                                                                 .entityToDto(user,
                                                                                                                                                 auths)));
                                                                         }));
                                 });
         }
 
-        // 사용자 권한 제거
+        // deleteAuth
         public Mono<UserInfoDto> removeUserAuth(String userId, String role) {
                 return userInfoRepository.findById(new ObjectId(userId))
                                 .flatMap(user -> {
@@ -154,7 +145,8 @@ public class UserService {
                                                         .flatMap(auths -> {
                                                                 // 권한이 1개인 경우 삭제 불가 (최소 하나의 권한 필요)
                                                                 if (auths.size() <= 1) {
-                                                                        return Mono.just(EntityDtoUtil.entityToDto(user,
+                                                                        return Mono.just(UserEntityDtoUtil.entityToDto(
+                                                                                        user,
                                                                                         auths));
                                                                 }
 
@@ -166,17 +158,60 @@ public class UserService {
                                                                                                 .findByUserObjectId(user
                                                                                                                 .get_id())
                                                                                                 .collectList()
-                                                                                                .map(updatedAuths -> EntityDtoUtil
+                                                                                                .map(updatedAuths -> UserEntityDtoUtil
                                                                                                                 .entityToDto(user,
                                                                                                                                 updatedAuths)));
                                                         });
                                 });
         }
 
-        // 사용자의 모든 권한 조회
+        // getAllAuths
         public Flux<UserAuthDto> getUserAuths(String userId) {
                 return userInfoRepository.findById(new ObjectId(userId))
                                 .flatMapMany(user -> userAuthRepository.findByUserObjectId(user.get_id())
-                                                .map(EntityDtoUtil::authEntityToDto));
+                                                .map(UserEntityDtoUtil::authEntityToDto));
+        }
+
+        public Mono<ResponseDto<String>> login(UserInfoDto userInfoDto) {
+                return userInfoRepository.findByUserEmail(userInfoDto.getUserEmail())
+                                .flatMap(userInfo -> {
+                                        // 비밀번호 검증
+                                        if (!passwordEncoder.matches(userInfoDto.getUserPassword(),
+                                                        userInfo.getUserPassword())) {
+                                                // 비밀번호 불일치
+                                                return Mono.just(ResponseDto.create("비밀번호 불일치", "비밀번호가 일치하지 않습니다.",
+                                                                HttpStatus.NOT_FOUND));
+                                        }
+
+                                        // 사용자 권한 조회
+                                        return userAuthRepository.findByUserObjectId(userInfo.get_id())
+                                                        .collectList()
+                                                        .flatMap(auths -> {
+                                                                // 권한 목록 생성
+                                                                String authorities = auths.stream()
+                                                                                .map(UserAuthEntity::getUserRole)
+                                                                                .collect(Collectors.joining(","));
+
+                                                                // 인증 정보 생성
+                                                                Authentication authentication = new UsernamePasswordAuthenticationToken(
+                                                                                userInfo.getUserId(),
+                                                                                null,
+                                                                                auths.stream()
+                                                                                                .map(auth -> new SimpleGrantedAuthority(
+                                                                                                                auth.getUserRole()))
+                                                                                                .collect(Collectors
+                                                                                                                .toList()));
+
+                                                                // JWT 토큰 생성 (JwtTokenProvider 의존성 주입 필요)
+                                                                String token = jwtTokenProvider
+                                                                                .createToken(authentication);
+
+                                                                // 토큰을 포함한 응답 생성
+                                                                return Mono.just(ResponseDto.create(token, "로그인 성공",
+                                                                                HttpStatus.OK));
+                                                        });
+                                })
+                                .switchIfEmpty(Mono.just(
+                                                ResponseDto.create(null, "사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND)));
         }
 }

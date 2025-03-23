@@ -1,5 +1,7 @@
 package com.kyn.spring_backend.base.dto;
 
+import org.springframework.http.HttpStatus;
+
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -15,6 +17,6 @@ public class ResponseDto<T> {
 
     private String message;
 
-    private String status;
+    private HttpStatus status;
 
 }

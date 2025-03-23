@@ -1,6 +1,7 @@
 package com.kyn.spring_backend.base.security;
 
 import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jws;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
 
@@ -40,33 +41,32 @@ public class JwtTokenProvider {
         Date validity = new Date(now + this.tokenValidityInMilliseconds);
 
         return Jwts.builder()
-                .setSubject(authentication.getName())
+                .subject(authentication.getName())
                 .claim(AUTHORITIES_KEY, authorities)
-                .signWith(secretKey, SignatureAlgorithm.HS512)
-                .setExpiration(validity)
+                .signWith(secretKey)
+                .expiration(validity)
                 .compact();
     }
 
     public Authentication getAuthentication(String token) {
-        Claims claims = Jwts.parserBuilder()
-                .setSigningKey(secretKey)
+        Jws<Claims> claims = Jwts.parser()
+                .verifyWith(secretKey)
                 .build()
-                .parseClaimsJws(token)
-                .getBody();
+                .parseSignedClaims(token);
 
         Collection<? extends GrantedAuthority> authorities = Arrays
-                .stream(claims.get(AUTHORITIES_KEY).toString().split(","))
+                .stream(claims.getPayload().get(AUTHORITIES_KEY).toString().split(","))
                 .map(SimpleGrantedAuthority::new)
                 .collect(Collectors.toList());
 
-        User principal = new User(claims.getSubject(), "", authorities);
+        User principal = new User(claims.getPayload().getSubject(), "", authorities);
 
         return new UsernamePasswordAuthenticationToken(principal, token, authorities);
     }
 
     public boolean validateToken(String token) {
         try {
-            Jwts.parserBuilder().setSigningKey(secretKey).build().parseClaimsJws(token);
+            Jwts.parser().verifyWith(secretKey).build().parse(token);
             return true;
         } catch (Exception e) {
             return false;
