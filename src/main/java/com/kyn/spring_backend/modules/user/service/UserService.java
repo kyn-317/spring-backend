@@ -2,8 +2,12 @@ package com.kyn.spring_backend.modules.user.service;
 
 import java.util.Collections;
 import java.util.stream.Collectors;
+import java.util.Date;
+import java.util.concurrent.TimeUnit;
 
 import org.bson.types.ObjectId;
+import org.redisson.api.RMapCacheReactive;
+import org.redisson.api.RedissonClient;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.http.HttpStatus;
@@ -13,16 +17,22 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 
 import com.kyn.spring_backend.modules.user.dto.UserEntityDtoUtil;
 import com.kyn.spring_backend.base.dto.ResponseDto;
+import com.kyn.spring_backend.base.exception.InvalidTokenException;
+import com.kyn.spring_backend.modules.product.dto.ProductBasDto;
 import com.kyn.spring_backend.modules.user.dto.UserAuthDto;
 import com.kyn.spring_backend.modules.user.dto.UserInfoDto;
 import com.kyn.spring_backend.modules.user.entity.UserAuthEntity;
-import com.kyn.spring_backend.modules.user.entity.UserInfoEntity;
+import com.kyn.spring_backend.modules.user.exception.InvalidCredentialsException;
+import com.kyn.spring_backend.modules.user.exception.UserNotFoundException;
 import com.kyn.spring_backend.modules.user.repository.UserAuthRepository;
 import com.kyn.spring_backend.modules.user.repository.UserInfoRepository;
 import com.kyn.spring_backend.base.security.JwtTokenProvider;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jws;
+import io.jsonwebtoken.Jwts;
 
 @Service
 public class UserService {
@@ -31,13 +41,16 @@ public class UserService {
         private final UserAuthRepository userAuthRepository;
         private final PasswordEncoder passwordEncoder;
         private final JwtTokenProvider jwtTokenProvider;
+        private final RMapCacheReactive<String, Boolean> jwtBlacklistMap;
 
         public UserService(UserInfoRepository userInfoRepository, UserAuthRepository userAuthRepository,
-                        PasswordEncoder passwordEncoder, JwtTokenProvider jwtTokenProvider) {
+                        PasswordEncoder passwordEncoder, JwtTokenProvider jwtTokenProvider,
+                        RedissonClient redissonClient) {
                 this.userInfoRepository = userInfoRepository;
                 this.userAuthRepository = userAuthRepository;
                 this.passwordEncoder = passwordEncoder;
                 this.jwtTokenProvider = jwtTokenProvider;
+                this.jwtBlacklistMap = redissonClient.reactive().getMapCache("logout:id");
         }
 
         public Mono<UserInfoDto> createUser(UserInfoDto userInfoDto) {
@@ -95,12 +108,10 @@ public class UserService {
         public Mono<UserInfoDto> addUserAuth(String userId, UserAuthDto userAuthDto) {
                 return userInfoRepository.findById(new ObjectId(userId))
                                 .flatMap(user -> {
-                                        // 이미 해당 권한이 있는지 확인
                                         return userAuthRepository
                                                         .findByUserObjectIdAndUserRole(user.get_id(),
                                                                         userAuthDto.getUserRole())
                                                         .flatMap(existingAuth -> {
-                                                                // 이미 존재하면 그대로 반환 (중복 추가 방지)
                                                                 return userAuthRepository
                                                                                 .findByUserObjectId(user.get_id())
                                                                                 .collectList()
@@ -110,7 +121,6 @@ public class UserService {
                                                                                                                 auths));
                                                         })
                                                         .switchIfEmpty(
-                                                                        // 존재하지 않으면 새 권한 추가
                                                                         Mono.defer(() -> {
                                                                                 UserAuthEntity authEntity = new UserAuthEntity();
                                                                                 authEntity.setUserObjectId(
@@ -139,18 +149,17 @@ public class UserService {
         public Mono<UserInfoDto> removeUserAuth(String userId, String role) {
                 return userInfoRepository.findById(new ObjectId(userId))
                                 .flatMap(user -> {
-                                        // 사용자의 모든 권한 조회
+
                                         return userAuthRepository.findByUserObjectId(user.get_id())
                                                         .collectList()
                                                         .flatMap(auths -> {
-                                                                // 권한이 1개인 경우 삭제 불가 (최소 하나의 권한 필요)
+
                                                                 if (auths.size() <= 1) {
                                                                         return Mono.just(UserEntityDtoUtil.entityToDto(
                                                                                         user,
                                                                                         auths));
                                                                 }
 
-                                                                // 권한 삭제
                                                                 return userAuthRepository
                                                                                 .deleteByUserObjectIdAndUserRole(
                                                                                                 user.get_id(), role)
@@ -174,25 +183,20 @@ public class UserService {
 
         public Mono<ResponseDto<String>> login(UserInfoDto userInfoDto) {
                 return userInfoRepository.findByUserEmail(userInfoDto.getUserEmail())
+                                .switchIfEmpty(Mono.error(new UserNotFoundException()))
                                 .flatMap(userInfo -> {
-                                        // 비밀번호 검증
                                         if (!passwordEncoder.matches(userInfoDto.getUserPassword(),
                                                         userInfo.getUserPassword())) {
-                                                // 비밀번호 불일치
-                                                return Mono.just(ResponseDto.create("비밀번호 불일치", "비밀번호가 일치하지 않습니다.",
-                                                                HttpStatus.NOT_FOUND));
+                                                return Mono.error(new InvalidCredentialsException());
                                         }
 
-                                        // 사용자 권한 조회
                                         return userAuthRepository.findByUserObjectId(userInfo.get_id())
                                                         .collectList()
                                                         .flatMap(auths -> {
-                                                                // 권한 목록 생성
                                                                 String authorities = auths.stream()
                                                                                 .map(UserAuthEntity::getUserRole)
                                                                                 .collect(Collectors.joining(","));
 
-                                                                // 인증 정보 생성
                                                                 Authentication authentication = new UsernamePasswordAuthenticationToken(
                                                                                 userInfo.getUserId(),
                                                                                 null,
@@ -202,16 +206,34 @@ public class UserService {
                                                                                                 .collect(Collectors
                                                                                                                 .toList()));
 
-                                                                // JWT 토큰 생성 (JwtTokenProvider 의존성 주입 필요)
                                                                 String token = jwtTokenProvider
                                                                                 .createToken(authentication);
 
-                                                                // 토큰을 포함한 응답 생성
-                                                                return Mono.just(ResponseDto.create(token, "로그인 성공",
+                                                                return Mono.just(ResponseDto.create(token,
+                                                                                "loginSuccess",
                                                                                 HttpStatus.OK));
                                                         });
-                                })
-                                .switchIfEmpty(Mono.just(
-                                                ResponseDto.create(null, "사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND)));
+                                });
+        }
+
+        public Mono<ResponseDto<String>> isLogin(String token) {
+                return Mono.just(token)
+                                .flatMap(t -> (!jwtTokenProvider.validateToken(t) || jwtBlacklistMap.get(t).block())
+                                                ? Mono.error(new InvalidTokenException())
+                                                : Mono.just(ResponseDto.create("SUCCESS LOGIN",
+                                                                "login success", HttpStatus.OK)));
+        }
+
+        public Mono<ResponseDto<String>> logout(String token) {
+                if (!jwtTokenProvider.validateToken(token)) {
+                        return Mono.error(new InvalidTokenException());
+                }
+
+                Jws<Claims> claims = jwtTokenProvider.getClaims(token);
+                long ttl = (claims.getPayload().getExpiration().getTime()
+                                - System.currentTimeMillis()) / 1000;
+
+                return jwtBlacklistMap.fastPut(token, true, ttl, TimeUnit.SECONDS)
+                                .map(result -> ResponseDto.create("SUCCESS LOGOUT", "logout success", HttpStatus.OK));
         }
 }

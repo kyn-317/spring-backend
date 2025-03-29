@@ -72,4 +72,9 @@ public class JwtTokenProvider {
             return false;
         }
     }
+
+    public Jws<Claims> getClaims(String token) {
+        return Jwts.parser().verifyWith(secretKey).build().parseSignedClaims(token);
+    }
+
 }
