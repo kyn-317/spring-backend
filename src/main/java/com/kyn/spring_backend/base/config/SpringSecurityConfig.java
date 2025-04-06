@@ -35,7 +35,8 @@ public class SpringSecurityConfig {
                 .securityContextRepository(NoOpServerSecurityContextRepository.getInstance())
                 .authorizeExchange(exchanges -> exchanges
                         .pathMatchers("/user/**").permitAll()
-                        .anyExchange().authenticated())
+                        .pathMatchers("/api/products/postgre/**").permitAll()
+                        .anyExchange().permitAll())
                 .addFilterAt(new JwtAuthenticationFilter(tokenProvider), SecurityWebFiltersOrder.HTTP_BASIC)
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .build();
